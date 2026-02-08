@@ -675,7 +675,9 @@
           placeholder="Scan or type barcode..."
           autocomplete="off"
           autofocus
+          enterkeyhint="search"
         >
+        <button class="btn btn-secondary" id="cameraScanBtn" style="margin-top: 0.5rem; width: 100%;">📷 Scan with Camera</button>
       </div>
       <div class="btn-group">
         <button class="btn btn-primary" id="searchBtn">Search</button>
@@ -761,6 +763,7 @@
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://unpkg.com/@zxing/library@latest"></script>
   <script>
     // State management
     let productsData = [];
@@ -800,6 +803,9 @@
     const stockItemCount = document.getElementById('stockItemCount');
     const exportBtn = document.getElementById('exportBtn');
     const clearAllBtn = document.getElementById('clearAllBtn');
+    
+    // Camera scan button
+    const cameraScanBtn = document.getElementById('cameraScanBtn');
 
     // Initialize
     init();
@@ -850,6 +856,99 @@
       addStockBtn.addEventListener('click', addStockItem);
       exportBtn.addEventListener('click', exportToExcel);
       clearAllBtn.addEventListener('click', clearAllStock);
+      
+      // Camera scan
+      cameraScanBtn.addEventListener('click', startCameraScan);
+    }
+    
+    // Camera scanning
+    let codeReader = null;
+    
+    async function startCameraScan() {
+      try {
+        // Initialize code reader if not already done
+        if (!codeReader) {
+          codeReader = new ZXing.BrowserMultiFormatReader();
+        }
+        
+        updateStatus('Starting camera...', 'loading');
+        
+        // Get video devices
+        const videoInputDevices = await codeReader.listVideoInputDevices();
+        
+        if (videoInputDevices.length === 0) {
+          updateStatus('No camera found', 'error');
+          return;
+        }
+        
+        // Use back camera if available (for mobile)
+        const selectedDeviceId = videoInputDevices.find(device => 
+          device.label.toLowerCase().includes('back')
+        )?.deviceId || videoInputDevices[0].deviceId;
+        
+        // Create video element
+        const videoElement = document.createElement('video');
+        videoElement.style.width = '100%';
+        videoElement.style.maxWidth = '400px';
+        videoElement.style.border = '2px solid var(--accent-blue)';
+        videoElement.style.borderRadius = '0.5rem';
+        
+        // Show video in modal
+        const scanModal = document.createElement('div');
+        scanModal.style.cssText = `
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0,0,0,0.9);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          z-index: 9999;
+          padding: 1rem;
+        `;
+        
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = '✕ Close Camera';
+        closeBtn.className = 'btn btn-secondary';
+        closeBtn.style.marginTop = '1rem';
+        
+        scanModal.appendChild(videoElement);
+        scanModal.appendChild(closeBtn);
+        document.body.appendChild(scanModal);
+        
+        // Start scanning
+        codeReader.decodeFromVideoDevice(selectedDeviceId, videoElement, (result, err) => {
+          if (result) {
+            // Got a barcode!
+            const barcode = result.text;
+            barcodeInput.value = barcode;
+            
+            // Stop camera
+            codeReader.reset();
+            document.body.removeChild(scanModal);
+            
+            // Search automatically
+            searchProduct();
+            updateStatus('Barcode scanned!', 'success');
+          }
+        });
+        
+        updateStatus('Point camera at barcode', 'info');
+        
+        // Close button
+        closeBtn.onclick = () => {
+          codeReader.reset();
+          document.body.removeChild(scanModal);
+          updateStatus('Camera closed', 'info');
+        };
+        
+      } catch (error) {
+        console.error('Camera error:', error);
+        updateStatus('Camera access denied or not available', 'error');
+      }
     }
 
     function switchMode(mode) {
