@@ -697,6 +697,7 @@
           placeholder="Scan barcode..."
           autocomplete="off"
         >
+        <button class="btn btn-secondary" id="stockCameraScanBtn" style="margin-top: 0.5rem; width: 100%;">📷 Scan with Camera</button>
       </div>
       <div class="input-group">
         <label for="quantityInput">Quantity in Stock</label>
@@ -806,6 +807,7 @@
     
     // Camera scan button
     const cameraScanBtn = document.getElementById('cameraScanBtn');
+    const stockCameraScanBtn = document.getElementById('stockCameraScanBtn');
 
     // Initialize
     init();
@@ -859,6 +861,7 @@
       
       // Camera scan
       cameraScanBtn.addEventListener('click', startCameraScan);
+      stockCameraScanBtn.addEventListener('click', startStockCameraScan);
     }
     
     // Camera scanning
@@ -939,6 +942,85 @@
         updateStatus('Point camera at barcode', 'info');
         
         // Close button
+        closeBtn.onclick = () => {
+          codeReader.reset();
+          document.body.removeChild(scanModal);
+          updateStatus('Camera closed', 'info');
+        };
+        
+      } catch (error) {
+        console.error('Camera error:', error);
+        updateStatus('Camera access denied or not available', 'error');
+      }
+    }
+    
+    // Stock take camera scanning
+    async function startStockCameraScan() {
+      try {
+        if (!codeReader) {
+          codeReader = new ZXing.BrowserMultiFormatReader();
+        }
+        
+        updateStatus('Starting camera...', 'loading');
+        
+        const videoInputDevices = await codeReader.listVideoInputDevices();
+        
+        if (videoInputDevices.length === 0) {
+          updateStatus('No camera found', 'error');
+          return;
+        }
+        
+        const selectedDeviceId = videoInputDevices.find(device => 
+          device.label.toLowerCase().includes('back')
+        )?.deviceId || videoInputDevices[0].deviceId;
+        
+        const videoElement = document.createElement('video');
+        videoElement.style.width = '100%';
+        videoElement.style.maxWidth = '400px';
+        videoElement.style.border = '2px solid var(--accent-blue)';
+        videoElement.style.borderRadius = '0.5rem';
+        
+        const scanModal = document.createElement('div');
+        scanModal.style.cssText = `
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0,0,0,0.9);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          z-index: 9999;
+          padding: 1rem;
+        `;
+        
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = '✕ Close Camera';
+        closeBtn.className = 'btn btn-secondary';
+        closeBtn.style.marginTop = '1rem';
+        
+        scanModal.appendChild(videoElement);
+        scanModal.appendChild(closeBtn);
+        document.body.appendChild(scanModal);
+        
+        codeReader.decodeFromVideoDevice(selectedDeviceId, videoElement, (result, err) => {
+          if (result) {
+            const barcode = result.text;
+            stockBarcodeInput.value = barcode;
+            
+            codeReader.reset();
+            document.body.removeChild(scanModal);
+            
+            // Auto-focus to quantity input
+            quantityInput.focus();
+            updateStatus('Barcode scanned! Enter quantity', 'success');
+          }
+        });
+        
+        updateStatus('Point camera at barcode', 'info');
+        
         closeBtn.onclick = () => {
           codeReader.reset();
           document.body.removeChild(scanModal);
