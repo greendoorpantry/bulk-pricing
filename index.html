@@ -866,6 +866,43 @@
     
     // Camera scanning
     let codeReader = null;
+    let cameraPermissionGranted = false;
+    
+    // Pre-request camera permission on load for faster scanning
+    async function prewarmCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        // Got permission - stop the stream immediately, we just wanted the permission
+        stream.getTracks().forEach(track => track.stop());
+        cameraPermissionGranted = true;
+      } catch (e) {
+        // Permission denied or not available - that's OK, we'll prompt when they tap scan
+        console.log('Camera prewarm skipped:', e.message);
+      }
+    }
+    
+    // Prewarm camera permission after a short delay (don't block page load)
+    setTimeout(prewarmCamera, 1000);
+    
+    // Barcode matching helper - handles leading zero differences (EAN-13 vs UPC-A)
+    function findProductByBarcode(barcode) {
+      const clean = barcode.replace(/[^a-zA-Z0-9-]/g, '');
+      // Exact match
+      let product = productsData.find(p => p.barcode === clean);
+      if (product) return { product, barcode: clean };
+      
+      // Try without leading zeros
+      if (clean.startsWith('0')) {
+        product = productsData.find(p => p.barcode === clean.replace(/^0+/, ''));
+        if (product) return { product, barcode: clean };
+      }
+      // Try with leading zero
+      if (!clean.startsWith('0')) {
+        product = productsData.find(p => p.barcode === '0' + clean);
+        if (product) return { product, barcode: clean };
+      }
+      return { product: null, barcode: clean };
+    }
     
     async function startCameraScan() {
       try {
@@ -1072,9 +1109,7 @@
       }
       
       // Clean barcode - remove any non-alphanumeric except hyphens
-      const cleanBarcode = barcode.replace(/[^a-zA-Z0-9-]/g, '');
-      
-      const product = productsData.find(p => p.barcode === cleanBarcode);
+      const { product, barcode: cleanBarcode } = findProductByBarcode(barcode);
       
       if (!product) {
         updateStatus(`Product not found: ${cleanBarcode}`, 'error');
@@ -1235,14 +1270,34 @@
       updateStatus('Fetching data...', 'loading');
 
       try {
-        // Use CORS proxy for Google Drive
-        const corsProxy = 'https://api.allorigins.win/raw?url=';
-        const fetchUrl = dataUrl.includes('drive.google.com') 
-          ? corsProxy + encodeURIComponent(dataUrl)
-          : dataUrl;
+        let response;
         
-        const response = await fetch(fetchUrl);
-        if (!response.ok) throw new Error('Failed to fetch');
+        if (dataUrl.includes('drive.google.com') || dataUrl.includes('docs.google.com')) {
+          // Try multiple CORS proxies as fallbacks
+          const corsProxies = [
+            'https://api.allorigins.win/raw?url=',
+            'https://corsproxy.io/?',
+            'https://api.codetabs.com/v1/proxy?quest='
+          ];
+          
+          let lastError;
+          for (const proxy of corsProxies) {
+            try {
+              response = await fetch(proxy + encodeURIComponent(dataUrl));
+              if (response.ok) break;
+            } catch (e) {
+              lastError = e;
+              continue;
+            }
+          }
+          
+          if (!response || !response.ok) {
+            throw lastError || new Error('All CORS proxies failed');
+          }
+        } else {
+          response = await fetch(dataUrl);
+          if (!response.ok) throw new Error('Failed to fetch');
+        }
         
         const data = await response.json();
         productsData = data.products || [];
@@ -1251,7 +1306,12 @@
         updateStatus(`${productsData.length} products loaded`, 'success');
         settingsModal.classList.remove('active');
       } catch (error) {
-        updateStatus('Failed to fetch data from URL', 'error');
+        // If fetch fails but we have cached data, use it
+        if (productsData.length > 0) {
+          updateStatus(`Using cached data (${productsData.length} products) - refresh failed`, 'info');
+        } else {
+          updateStatus('Failed to fetch data from URL', 'error');
+        }
         console.error(error);
       }
     }
@@ -1302,10 +1362,8 @@
         return;
       }
 
-      // Clean barcode - remove any non-alphanumeric except hyphens
-      const cleanBarcode = barcode.replace(/[^a-zA-Z0-9-]/g, '');
-      
-      const product = productsData.find(p => p.barcode === cleanBarcode);
+      // Clean barcode and find product (handles EAN-13/UPC-A differences)
+      const { product, barcode: cleanBarcode } = findProductByBarcode(barcode);
       
       if (product) {
         currentProduct = product;
@@ -1396,9 +1454,9 @@
       updateStatus('Ready', 'info');
     }
 
-    // Auto-fetch on page load if URL is configured
+    // Auto-fetch on page load if URL is configured - always refresh
     window.addEventListener('load', () => {
-      if (dataUrl && productsData.length === 0) {
+      if (dataUrl) {
         fetchDataFromUrl();
       }
     });
