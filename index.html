@@ -770,7 +770,7 @@
     let productsData = [];
     let currentProduct = null;
     let taxMode = false;
-    let dataUrl = '';
+    let dataUrl = 'https://greendoorpantry.github.io/bulk-pricing/data/bulk_pricing_data.json';
     let currentMode = 'pricing'; // 'pricing' or 'stock'
     let stockItems = [];
 
@@ -1250,8 +1250,8 @@
       const storedUrl = localStorage.getItem('dataUrl');
       if (storedUrl) {
         dataUrl = storedUrl;
-        dataUrlInput.value = storedUrl;
       }
+      dataUrlInput.value = dataUrl;
     }
 
     function saveDataUrl() {
