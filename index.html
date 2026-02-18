@@ -798,6 +798,8 @@
           type="number" 
           id="quantityInput" 
           class="quantity-input" 
+          inputmode="numeric"
+          pattern="[0-9]*"
           placeholder="0"
           min="0"
           step="1"
@@ -1123,50 +1125,183 @@
         videoElement.style.borderRadius = '0.5rem';
         
         const scanModal = document.createElement('div');
+        scanModal.id = 'stockScanModal';
         scanModal.style.cssText = `
           position: fixed;
           top: 0;
           left: 0;
           right: 0;
           bottom: 0;
-          background: rgba(0,0,0,0.9);
+          background: rgba(0,0,0,0.95);
           display: flex;
           flex-direction: column;
           align-items: center;
           justify-content: center;
           z-index: 9999;
           padding: 1rem;
+          gap: 0.75rem;
+        `;
+        
+        // Product info area (shows after scan)
+        const productInfo = document.createElement('div');
+        productInfo.id = 'scanProductInfo';
+        productInfo.style.cssText = `
+          width: 100%;
+          max-width: 400px;
+          display: none;
+          text-align: center;
+        `;
+
+        // Quantity input area (shows after scan)
+        const qtyArea = document.createElement('div');
+        qtyArea.id = 'scanQtyArea';
+        qtyArea.style.cssText = `
+          width: 100%;
+          max-width: 400px;
+          display: none;
+          gap: 0.5rem;
+          flex-direction: column;
+          align-items: center;
+        `;
+        qtyArea.innerHTML = `
+          <label style="color: #a0aec0; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px;">Quantity in Stock</label>
+          <input type="number" inputmode="numeric" pattern="[0-9]*" id="scanQtyInput" 
+            style="width: 120px; padding: 0.75rem; text-align: center; font-size: 1.5rem; font-weight: 700; 
+            border: 2px solid var(--accent-green, #10b981); border-radius: 0.5rem; background: #1a202c; color: white;"
+            placeholder="0" min="0" step="1" autocomplete="off">
+          <button id="scanAddBtn" class="btn btn-primary" 
+            style="width: 100%; max-width: 200px; padding: 0.75rem; font-size: 1rem; margin-top: 0.25rem;">
+            Add to Stock Take
+          </button>
         `;
         
         const closeBtn = document.createElement('button');
-        closeBtn.textContent = '✕ Close Camera';
+        closeBtn.textContent = '✕ Close';
         closeBtn.className = 'btn btn-secondary';
-        closeBtn.style.marginTop = '1rem';
+        closeBtn.style.marginTop = '0.5rem';
         
         scanModal.appendChild(videoElement);
+        scanModal.appendChild(productInfo);
+        scanModal.appendChild(qtyArea);
         scanModal.appendChild(closeBtn);
         document.body.appendChild(scanModal);
         
-        codeReader.decodeFromVideoDevice(selectedDeviceId, videoElement, (result, err) => {
-          if (result) {
-            const barcode = result.text;
-            stockBarcodeInput.value = barcode;
-            
-            codeReader.reset();
-            document.body.removeChild(scanModal);
-            
-            // Auto-focus to quantity input
-            quantityInput.focus();
-            updateStatus('Barcode scanned! Enter quantity', 'success');
+        let currentScannedProduct = null;
+        let currentScannedBarcode = null;
+        
+        const startDecoding = () => {
+          videoElement.style.display = '';
+          productInfo.style.display = 'none';
+          qtyArea.style.display = 'none';
+          updateStatus('Point camera at barcode', 'info');
+          
+          codeReader.decodeFromVideoDevice(selectedDeviceId, videoElement, (result, err) => {
+            if (result) {
+              const barcode = result.text;
+              codeReader.reset();
+              
+              // Look up product
+              const { product, barcode: cleanBarcode } = findProductByBarcode(barcode);
+              currentScannedBarcode = cleanBarcode;
+              currentScannedProduct = product;
+              
+              // Hide video, show product info
+              videoElement.style.display = 'none';
+              
+              if (product) {
+                productInfo.innerHTML = `
+                  <div style="background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.4); border-radius: 0.5rem; padding: 0.75rem;">
+                    <div style="font-weight: 700; font-size: 1.1rem; color: #10b981; margin-bottom: 0.3rem;">${product.name}</div>
+                    <div style="display: flex; justify-content: center; gap: 1rem; font-size: 0.85rem; color: #a0aec0; flex-wrap: wrap;">
+                      <span>Supplier: <strong style="color: white;">${product.supplier || 'N/A'}</strong></span>
+                      <span>RRP: <strong style="color: white;">\u20AC${product.unitPrice.toFixed(2)}</strong></span>
+                      <span>Case: <strong style="color: white;">${product.caseQty}</strong></span>
+                      <span>Bulk: <strong style="color: #10b981;">\u20AC${product.bulkPrice.toFixed(2)}</strong></span>
+                    </div>
+                  </div>
+                `;
+                productInfo.style.display = 'block';
+                qtyArea.style.display = 'flex';
+                
+                const qtyInput = document.getElementById('scanQtyInput');
+                qtyInput.value = '';
+                qtyInput.focus();
+                
+                updateStatus(`Found: ${product.name}`, 'success');
+              } else {
+                productInfo.innerHTML = `
+                  <div style="background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.4); border-radius: 0.5rem; padding: 0.75rem;">
+                    <div style="font-weight: 700; font-size: 1rem; color: #ef4444;">Product not found</div>
+                    <div style="font-size: 0.85rem; color: #a0aec0;">Barcode: ${cleanBarcode}</div>
+                  </div>
+                `;
+                productInfo.style.display = 'block';
+                qtyArea.style.display = 'none';
+                
+                updateStatus(`Not found: ${cleanBarcode}`, 'error');
+                
+                // Auto-restart scanning after 2 seconds
+                setTimeout(() => startDecoding(), 2000);
+              }
+            }
+          });
+        };
+        
+        // Start scanning
+        startDecoding();
+        
+        // Add button handler
+        const handleAdd = () => {
+          const qtyInput = document.getElementById('scanQtyInput');
+          const quantity = parseInt(qtyInput.value);
+          
+          if (!currentScannedProduct || !quantity || quantity < 0) {
+            updateStatus('Enter a valid quantity', 'error');
+            qtyInput.focus();
+            return;
+          }
+          
+          // Add to stock list
+          const existingIndex = stockItems.findIndex(item => item.barcode === currentScannedBarcode);
+          if (existingIndex >= 0) {
+            stockItems[existingIndex].quantity = quantity;
+            updateStatus(`Updated: ${currentScannedProduct.name}`, 'success');
+          } else {
+            stockItems.push({
+              barcode: currentScannedBarcode,
+              name: currentScannedProduct.name,
+              supplier: currentScannedProduct.supplier || 'N/A',
+              rrp: currentScannedProduct.unitPrice || 0,
+              adjustedRrp: currentScannedProduct.unitPrice || 0,
+              quantity: quantity
+            });
+            updateStatus(`Added: ${currentScannedProduct.name}`, 'success');
+          }
+          
+          saveStockItems();
+          renderStockList();
+          
+          // Reset and restart camera for next scan
+          currentScannedProduct = null;
+          currentScannedBarcode = null;
+          startDecoding();
+        };
+        
+        // Handle Add button click
+        scanModal.querySelector('#scanAddBtn').addEventListener('click', handleAdd);
+        
+        // Handle Enter key on qty input
+        scanModal.querySelector('#scanQtyInput').addEventListener('keypress', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            handleAdd();
           }
         });
-        
-        updateStatus('Point camera at barcode', 'info');
         
         closeBtn.onclick = () => {
           codeReader.reset();
           document.body.removeChild(scanModal);
-          updateStatus('Camera closed', 'info');
+          updateStatus(`${stockItems.length} items in stock take`, 'info');
         };
         
       } catch (error) {
