@@ -520,59 +520,109 @@
     }
 
     .stock-item {
-      display: grid;
-      grid-template-columns: 1fr auto auto;
-      gap: 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
       align-items: center;
-      padding: 1rem;
+      padding: 0.75rem 1rem;
       background: var(--bg-secondary);
       border-radius: 0.5rem;
-      margin-bottom: 0.75rem;
+      margin-bottom: 0.5rem;
       animation: slideIn 0.3s ease-out;
     }
 
     .stock-item-info {
-      min-width: 0;
+      flex: 1;
+      min-width: 140px;
     }
 
     .stock-item-name {
       font-weight: 600;
       font-size: 0.875rem;
-      margin-bottom: 0.25rem;
+      margin-bottom: 0.15rem;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      max-width: 220px;
     }
 
     .stock-item-barcode {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       color: var(--text-secondary);
     }
 
-    .stock-item-qty {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 1.25rem;
-      font-weight: 700;
-      color: var(--accent-green);
+    .stock-item-fields {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .stock-field {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .stock-field label {
+      font-size: 0.6rem;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 2px;
+    }
+
+    .stock-inline-input {
+      width: 56px;
+      padding: 0.3rem;
       text-align: center;
-      min-width: 60px;
+      border: 1px solid var(--border-color);
+      border-radius: 0.375rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+      font-weight: 600;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+    }
+
+    .stock-rrp-input {
+      width: 68px;
+    }
+
+    .stock-inline-input:focus {
+      border-color: var(--accent-green);
+      outline: none;
+      box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+    }
+
+    .stock-rrp-adjusted {
+      color: #f59e0b !important;
+      border-color: #f59e0b !important;
     }
 
     .stock-item-remove {
       background: rgba(239, 68, 68, 0.1);
       color: #ef4444;
       border: 1px solid #ef4444;
-      padding: 0.5rem;
-      border-radius: 0.375rem;
+      border-radius: 50%;
+      width: 28px;
+      height: 28px;
       cursor: pointer;
       transition: all 0.2s;
-      font-size: 0.875rem;
-      font-weight: 600;
+      font-size: 0.8rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      padding: 0;
     }
 
     .stock-item-remove:hover {
-      background: rgba(239, 68, 68, 0.2);
+      background: rgba(239, 68, 68, 0.3);
+    }
+
+    .stock-item-qty {
+      display: none;
     }
 
     .stock-actions {
@@ -617,22 +667,21 @@
 
     @media (max-width: 640px) {
       .stock-item {
-        grid-template-columns: 1fr auto;
-      }
-
-      .stock-item-qty {
-        grid-column: 2;
-        grid-row: 1;
-      }
-
-      .stock-item-remove {
-        grid-column: 2;
-        grid-row: 2;
+        flex-wrap: wrap;
       }
 
       .stock-item-info {
-        grid-column: 1;
-        grid-row: 1 / 3;
+        width: 100%;
+        min-width: unset;
+      }
+
+      .stock-item-name {
+        max-width: none;
+      }
+
+      .stock-item-fields {
+        width: 100%;
+        justify-content: space-between;
       }
     }
 
@@ -770,7 +819,7 @@
     let productsData = [];
     let currentProduct = null;
     let taxMode = false;
-    let dataUrl = '';
+    let dataUrl = 'https://greendoorpantry.github.io/bulk-pricing/data/bulk_pricing_data.json';
     let currentMode = 'pricing'; // 'pricing' or 'stock'
     let stockItems = [];
 
@@ -1126,6 +1175,9 @@
         stockItems.push({
           barcode: cleanBarcode,
           name: product.name,
+          supplier: product.supplier || 'N/A',
+          rrp: product.unitPrice || 0,
+          adjustedRrp: product.unitPrice || 0,
           quantity: quantity
         });
         updateStatus(`Added: ${product.name}`, 'success');
@@ -1157,12 +1209,34 @@
         <div class="stock-item">
           <div class="stock-item-info">
             <div class="stock-item-name">${item.name}</div>
-            <div class="stock-item-barcode">${item.barcode}</div>
+            <div class="stock-item-barcode">${item.barcode} · ${item.supplier || 'N/A'}</div>
           </div>
-          <div class="stock-item-qty">${item.quantity}</div>
-          <button class="stock-item-remove" onclick="removeStockItem(${index})">Remove</button>
+          <div class="stock-item-fields">
+            <div class="stock-field">
+              <label>Qty</label>
+              <input type="number" class="stock-inline-input" value="${item.quantity}" min="0" 
+                onchange="updateStockField(${index}, 'quantity', this.value)">
+            </div>
+            <div class="stock-field">
+              <label>RRP</label>
+              <input type="number" class="stock-inline-input stock-rrp-input" value="${(item.adjustedRrp || item.rrp || 0).toFixed(2)}" min="0" step="0.01"
+                onchange="updateStockField(${index}, 'adjustedRrp', this.value)"
+                ${item.adjustedRrp !== item.rrp ? 'style="color: #e67e22; font-weight: bold;"' : ''}>
+            </div>
+            <button class="stock-item-remove" onclick="removeStockItem(${index})">✕</button>
+          </div>
         </div>
       `).join('');
+    }
+
+    function updateStockField(index, field, value) {
+      if (field === 'quantity') {
+        stockItems[index].quantity = parseInt(value) || 0;
+      } else if (field === 'adjustedRrp') {
+        stockItems[index].adjustedRrp = parseFloat(value) || 0;
+      }
+      saveStockItems();
+      // Don't re-render to avoid losing focus, just save
     }
 
     function removeStockItem(index) {
@@ -1209,7 +1283,11 @@
       const excelData = stockItems.map(item => ({
         'Product Name': item.name,
         'Barcode': item.barcode,
-        'Current Stock': item.quantity
+        'Supplier': item.supplier || 'N/A',
+        'Current Stock': item.quantity,
+        'Original RRP': item.rrp ? item.rrp.toFixed(2) : '0.00',
+        'Adjusted RRP': item.adjustedRrp ? item.adjustedRrp.toFixed(2) : (item.rrp ? item.rrp.toFixed(2) : '0.00'),
+        'RRP Changed': item.adjustedRrp !== item.rrp ? 'YES' : ''
       }));
       
       // Create workbook and worksheet
@@ -1218,9 +1296,13 @@
       
       // Set column widths
       ws['!cols'] = [
-        { wch: 40 }, // Product Name
+        { wch: 35 }, // Product Name
         { wch: 15 }, // Barcode
-        { wch: 15 }  // Current Stock
+        { wch: 15 }, // Supplier
+        { wch: 14 }, // Current Stock
+        { wch: 12 }, // Original RRP
+        { wch: 12 }, // Adjusted RRP
+        { wch: 12 }  // RRP Changed
       ];
       
       XLSX.utils.book_append_sheet(wb, ws, 'Stock Take');
@@ -1250,8 +1332,8 @@
       const storedUrl = localStorage.getItem('dataUrl');
       if (storedUrl) {
         dataUrl = storedUrl;
-        dataUrlInput.value = storedUrl;
       }
+      dataUrlInput.value = dataUrl;
     }
 
     function saveDataUrl() {
