@@ -1209,6 +1209,10 @@
               videoElement.style.display = 'none';
               
               if (product) {
+                const existingItem = stockItems.find(item => item.barcode === cleanBarcode);
+                const existingNote = existingItem 
+                  ? `<div style="margin-top: 0.4rem; font-size: 0.85rem; color: #f59e0b;">Already counted: ${existingItem.quantity} — new quantity will be added</div>` 
+                  : '';
                 productInfo.innerHTML = `
                   <div style="background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.4); border-radius: 0.5rem; padding: 0.75rem;">
                     <div style="font-weight: 700; font-size: 1.1rem; color: #10b981; margin-bottom: 0.3rem;">${product.name}</div>
@@ -1218,6 +1222,7 @@
                       <span>Case: <strong style="color: white;">${product.caseQty}</strong></span>
                       <span>Bulk: <strong style="color: #10b981;">\u20AC${product.bulkPrice.toFixed(2)}</strong></span>
                     </div>
+                    ${existingNote}
                   </div>
                 `;
                 productInfo.style.display = 'block';
@@ -1255,17 +1260,17 @@
           const qtyInput = document.getElementById('scanQtyInput');
           const quantity = parseInt(qtyInput.value);
           
-          if (!currentScannedProduct || !quantity || quantity < 0) {
+          if (!currentScannedProduct || isNaN(quantity) || quantity < 0) {
             updateStatus('Enter a valid quantity', 'error');
             qtyInput.focus();
             return;
           }
           
-          // Add to stock list
+          // Add to stock list - ADD to existing quantity if scanned again
           const existingIndex = stockItems.findIndex(item => item.barcode === currentScannedBarcode);
           if (existingIndex >= 0) {
-            stockItems[existingIndex].quantity = quantity;
-            updateStatus(`Updated: ${currentScannedProduct.name}`, 'success');
+            stockItems[existingIndex].quantity += quantity;
+            updateStatus(`Updated: ${currentScannedProduct.name} (total: ${stockItems[existingIndex].quantity})`, 'success');
           } else {
             stockItems.push({
               barcode: currentScannedBarcode,
@@ -1378,7 +1383,7 @@
         return;
       }
       
-      if (!quantity || quantity < 0) {
+      if (isNaN(quantity) || quantity < 0) {
         updateStatus('Please enter a valid quantity', 'error');
         return;
       }
@@ -1391,12 +1396,12 @@
         return;
       }
       
-      // Check if already exists, update quantity if so
+      // Check if already exists - ADD to existing quantity (for multiple locations)
       const existingIndex = stockItems.findIndex(item => item.barcode === cleanBarcode);
       
       if (existingIndex >= 0) {
-        stockItems[existingIndex].quantity = quantity;
-        updateStatus(`Updated: ${product.name}`, 'success');
+        stockItems[existingIndex].quantity += quantity;
+        updateStatus(`Updated: ${product.name} (total: ${stockItems[existingIndex].quantity})`, 'success');
       } else {
         stockItems.push({
           barcode: cleanBarcode,
