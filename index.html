@@ -625,6 +625,48 @@
       display: none;
     }
 
+    .stock-preview {
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-radius: 0.5rem;
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .stock-preview.not-found {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+
+    .stock-preview-name {
+      font-weight: 700;
+      font-size: 1rem;
+      color: var(--accent-green);
+      margin-bottom: 0.25rem;
+    }
+
+    .stock-preview.not-found .stock-preview-name {
+      color: #ef4444;
+    }
+
+    .stock-preview-details {
+      display: flex;
+      gap: 1rem;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      flex-wrap: wrap;
+    }
+
+    .stock-preview-details span {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    .stock-preview-details strong {
+      color: var(--text-primary);
+    }
+
     .stock-actions {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -748,6 +790,8 @@
         >
         <button class="btn btn-secondary" id="stockCameraScanBtn" style="margin-top: 0.5rem; width: 100%;">📷 Scan with Camera</button>
       </div>
+      <!-- Product preview after scan -->
+      <div id="stockProductPreview" class="stock-preview hidden"></div>
       <div class="input-group">
         <label for="quantityInput">Quantity in Stock</label>
         <input 
@@ -893,7 +937,19 @@
       stockBarcodeInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
+          showStockPreview();
           quantityInput.focus();
+        }
+      });
+
+      // Also show preview on input change (for camera scan)
+      stockBarcodeInput.addEventListener('input', () => {
+        const val = stockBarcodeInput.value.trim();
+        if (val.length >= 8) {
+          showStockPreview();
+        } else {
+          const preview = document.getElementById('stockProductPreview');
+          preview.classList.add('hidden');
         }
       });
       
@@ -1143,6 +1199,41 @@
       updateStatus(`${mode === 'pricing' ? 'Pricing' : 'Stock Take'} mode`, 'info');
     }
 
+    function showStockPreview() {
+      const barcode = stockBarcodeInput.value.trim();
+      const preview = document.getElementById('stockProductPreview');
+      
+      if (!barcode) {
+        preview.classList.add('hidden');
+        return;
+      }
+
+      const { product, barcode: cleanBarcode } = findProductByBarcode(barcode);
+
+      if (product) {
+        preview.className = 'stock-preview';
+        preview.innerHTML = `
+          <div class="stock-preview-name">${product.name}</div>
+          <div class="stock-preview-details">
+            <span>Supplier: <strong>${product.supplier || 'N/A'}</strong></span>
+            <span>RRP: <strong>\u20AC${product.unitPrice.toFixed(2)}</strong></span>
+            <span>Case Qty: <strong>${product.caseQty}</strong></span>
+            <span>Bulk: <strong>\u20AC${product.bulkPrice.toFixed(2)}</strong></span>
+          </div>
+        `;
+        updateStatus(`Barcode scanned! Enter quantity`, 'success');
+      } else {
+        preview.className = 'stock-preview not-found';
+        preview.innerHTML = `
+          <div class="stock-preview-name">Product not found</div>
+          <div class="stock-preview-details">
+            <span>Barcode: <strong>${cleanBarcode}</strong></span>
+          </div>
+        `;
+        updateStatus(`Product not found: ${cleanBarcode}`, 'error');
+      }
+    }
+
     function addStockItem() {
       const barcode = stockBarcodeInput.value.trim();
       const quantity = parseInt(quantityInput.value);
@@ -1189,6 +1280,7 @@
       // Clear inputs and focus back to barcode
       stockBarcodeInput.value = '';
       quantityInput.value = '';
+      document.getElementById('stockProductPreview').classList.add('hidden');
       stockBarcodeInput.focus();
     }
 
