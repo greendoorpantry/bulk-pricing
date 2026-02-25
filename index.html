@@ -837,7 +837,19 @@
         <button class="close-btn" id="closeSettingsBtn">×</button>
       </div>
       <div class="input-group">
-        <label>Google Drive JSON URL</label>
+        <label>CES Touch API URL (local network)</label>
+        <input 
+          type="text" 
+          id="apiUrlInput" 
+          class="barcode-input" 
+          placeholder="http://192.168.178.50:8000"
+          style="font-size: 0.875rem;"
+        >
+        <div id="apiStatus" style="font-size: 0.75rem; margin-top: 0.5rem; color: var(--text-secondary);"></div>
+      </div>
+      <button class="btn btn-primary" id="saveApiUrlBtn" style="width: 100%; margin-bottom: 1.5rem;">Save & Test API</button>
+      <div class="input-group">
+        <label>Fallback JSON URL (GitHub Pages)</label>
         <input 
           type="text" 
           id="dataUrlInput" 
@@ -866,8 +878,40 @@
     let currentProduct = null;
     let taxMode = false;
     let dataUrl = 'https://greendoorpantry.github.io/bulk-pricing/data/bulk_pricing_data.json';
+    let apiUrl = localStorage.getItem('apiUrl') || 'http://192.168.178.50:8000';
+    let apiAvailable = false;
     let currentMode = 'pricing'; // 'pricing' or 'stock'
     let stockItems = [];
+
+    // API helper — calls the CES Touch API, returns null on failure
+    async function apiFetch(path) {
+      if (!apiUrl) return null;
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3000);
+        const resp = await fetch(apiUrl + path, { signal: controller.signal });
+        clearTimeout(timeout);
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        apiAvailable = true;
+        return data;
+      } catch (e) {
+        apiAvailable = false;
+        return null;
+      }
+    }
+
+    // Check API connectivity on load
+    async function checkApi() {
+      const data = await apiFetch('/products/search?q=TEST');
+      if (data !== null) {
+        apiAvailable = true;
+        updateStatus(`API connected · ${productsData.length} offline products`, 'success');
+      } else {
+        apiAvailable = false;
+        updateStatus(`API offline · using ${productsData.length} cached products`, 'info');
+      }
+    }
 
     // DOM elements
     const barcodeInput = document.getElementById('barcodeInput');
@@ -883,6 +927,9 @@
     const fetchDataBtn = document.getElementById('fetchDataBtn');
     const manualDataInput = document.getElementById('manualDataInput');
     const saveManualDataBtn = document.getElementById('saveManualDataBtn');
+    const apiUrlInput = document.getElementById('apiUrlInput');
+    const saveApiUrlBtn = document.getElementById('saveApiUrlBtn');
+    const apiStatus = document.getElementById('apiStatus');
     
     // Mode toggle elements
     const pricingModeBtn = document.getElementById('pricingModeBtn');
@@ -909,37 +956,40 @@
 
     function init() {
       loadFromStorage();
+      apiUrlInput.value = apiUrl;
       setupEventListeners();
       if (dataUrl) {
         fetchDataFromUrl();
       }
       loadStockItems();
+      checkApi();
     }
 
     function setupEventListeners() {
       barcodeInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
-          searchProduct();
+          searchProduct(); // already async, fire and forget is fine
         }
       });
 
-      searchBtn.addEventListener('click', searchProduct);
+      searchBtn.addEventListener('click', () => searchProduct());
       clearBtn.addEventListener('click', clearSearch);
       settingsBtn.addEventListener('click', () => settingsModal.classList.add('active'));
       closeSettingsBtn.addEventListener('click', () => settingsModal.classList.remove('active'));
       saveUrlBtn.addEventListener('click', saveDataUrl);
       fetchDataBtn.addEventListener('click', fetchDataFromUrl);
       saveManualDataBtn.addEventListener('click', loadManualData);
+      saveApiUrlBtn.addEventListener('click', saveApiUrl);
       
       // Mode toggle
       pricingModeBtn.addEventListener('click', () => switchMode('pricing'));
       stockModeBtn.addEventListener('click', () => switchMode('stock'));
       
       // Stock take events
-      stockBarcodeInput.addEventListener('keypress', (e) => {
+      stockBarcodeInput.addEventListener('keypress', async (e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
-          showStockPreview();
+          await showStockPreview();
           quantityInput.focus();
         }
       });
@@ -1077,7 +1127,7 @@
             codeReader.reset();
             document.body.removeChild(scanModal);
             
-            // Search automatically
+            // Search automatically (async)
             searchProduct();
             updateStatus('Barcode scanned!', 'success');
           }
@@ -1195,21 +1245,77 @@
           qtyArea.style.display = 'none';
           updateStatus('Point camera at barcode', 'info');
           
-          codeReader.decodeFromVideoDevice(selectedDeviceId, videoElement, (result, err) => {
+          codeReader.decodeFromVideoDevice(selectedDeviceId, videoElement, async (result, err) => {
             if (result) {
               const barcode = result.text;
               codeReader.reset();
+              const cleanBarcode = barcode.replace(/[^a-zA-Z0-9-]/g, '');
               
-              // Look up product
-              const { product, barcode: cleanBarcode } = findProductByBarcode(barcode);
-              currentScannedBarcode = cleanBarcode;
+              // Hide video, show loading
+              videoElement.style.display = 'none';
+              productInfo.innerHTML = `<div style="color: var(--accent-blue); padding: 1rem;">Looking up product...</div>`;
+              productInfo.style.display = 'block';
+
+              // Try API first
+              const apiData = await apiFetch(`/products/${encodeURIComponent(cleanBarcode)}`);
+              
+              if (apiData && apiData.product) {
+                const p = apiData.product;
+                const levels = apiData.price_levels || [];
+                const rrpLevel = levels.find(l => l.level === 0);
+                const bulkLevel = levels.find(l => l.level === 1);
+                const unitPrice = rrpLevel ? rrpLevel.price : 0;
+                const bulkPrice = bulkLevel ? bulkLevel.price : 0;
+                const caseQty = bulkLevel ? bulkLevel.quantity : (p.CASEQTY || 1);
+                const currentStock = p.STOCK || 0;
+
+                currentScannedBarcode = (p.PLU || '').trim();
+                currentScannedProduct = {
+                  name: (p.DESC || '').trim(),
+                  supplier: (p.SUPP || '').trim(),
+                  unitPrice: unitPrice,
+                  bulkPrice: bulkPrice,
+                  caseQty: caseQty
+                };
+                
+                const existingItem = stockItems.find(item => item.barcode === currentScannedBarcode);
+                const existingNote = existingItem 
+                  ? `<div style="margin-top: 0.4rem; font-size: 0.85rem; color: #f59e0b;">Already counted: ${existingItem.quantity} — new qty will be added</div>` 
+                  : '';
+
+                productInfo.innerHTML = `
+                  <div style="background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.4); border-radius: 0.5rem; padding: 0.75rem;">
+                    <div style="font-weight: 700; font-size: 1.1rem; color: #10b981; margin-bottom: 0.3rem;">${currentScannedProduct.name}</div>
+                    <div style="display: flex; justify-content: center; gap: 1rem; font-size: 0.85rem; color: #a0aec0; flex-wrap: wrap;">
+                      <span>Supplier: <strong style="color: white;">${currentScannedProduct.supplier || 'N/A'}</strong></span>
+                      <span>RRP: <strong style="color: white;">\u20AC${unitPrice.toFixed(2)}</strong></span>
+                      <span>Case: <strong style="color: white;">${caseQty}</strong></span>
+                      <span>Bulk: <strong style="color: #10b981;">\u20AC${bulkPrice.toFixed(2)}</strong></span>
+                    </div>
+                    <div style="display: flex; justify-content: center; gap: 1rem; font-size: 0.85rem; color: #a0aec0; margin-top: 0.4rem;">
+                      <span>📦 CES Stock: <strong style="color: ${currentStock > 0 ? '#10b981' : '#ef4444'};">${currentStock}</strong></span>
+                    </div>
+                    ${existingNote}
+                  </div>
+                `;
+                productInfo.style.display = 'block';
+                qtyArea.style.display = 'flex';
+                
+                const qtyInput = document.getElementById('scanQtyInput');
+                qtyInput.value = '';
+                qtyInput.focus();
+                
+                updateStatus(`Live: ${currentScannedProduct.name}`, 'success');
+                return;
+              }
+
+              // Fallback to offline data
+              const { product, barcode: foundBarcode } = findProductByBarcode(barcode);
+              currentScannedBarcode = foundBarcode;
               currentScannedProduct = product;
               
-              // Hide video, show product info
-              videoElement.style.display = 'none';
-              
               if (product) {
-                const existingItem = stockItems.find(item => item.barcode === cleanBarcode);
+                const existingItem = stockItems.find(item => item.barcode === foundBarcode);
                 const existingNote = existingItem 
                   ? `<div style="margin-top: 0.4rem; font-size: 0.85rem; color: #f59e0b;">Already counted: ${existingItem.quantity} — new quantity will be added</div>` 
                   : '';
@@ -1222,6 +1328,9 @@
                       <span>Case: <strong style="color: white;">${product.caseQty}</strong></span>
                       <span>Bulk: <strong style="color: #10b981;">\u20AC${product.bulkPrice.toFixed(2)}</strong></span>
                     </div>
+                    <div style="display: flex; justify-content: center; gap: 1rem; font-size: 0.85rem; margin-top: 0.4rem;">
+                      <span style="color: #f59e0b;">⚠ Offline — no live stock data</span>
+                    </div>
                     ${existingNote}
                   </div>
                 `;
@@ -1232,7 +1341,7 @@
                 qtyInput.value = '';
                 qtyInput.focus();
                 
-                updateStatus(`Found: ${product.name}`, 'success');
+                updateStatus(`Offline: ${product.name}`, 'info');
               } else {
                 productInfo.innerHTML = `
                   <div style="background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.4); border-radius: 0.5rem; padding: 0.75rem;">
@@ -1244,8 +1353,6 @@
                 qtyArea.style.display = 'none';
                 
                 updateStatus(`Not found: ${cleanBarcode}`, 'error');
-                
-                // Auto-restart scanning after 2 seconds
                 setTimeout(() => startDecoding(), 2000);
               }
             }
@@ -1339,7 +1446,7 @@
       updateStatus(`${mode === 'pricing' ? 'Pricing' : 'Stock Take'} mode`, 'info');
     }
 
-    function showStockPreview() {
+    async function showStockPreview() {
       const barcode = stockBarcodeInput.value.trim();
       const preview = document.getElementById('stockProductPreview');
       
@@ -1348,7 +1455,56 @@
         return;
       }
 
-      const { product, barcode: cleanBarcode } = findProductByBarcode(barcode);
+      const cleanBarcode = barcode.replace(/[^a-zA-Z0-9-]/g, '');
+
+      // Try API first for live stock data
+      const apiData = await apiFetch(`/products/${encodeURIComponent(cleanBarcode)}`);
+      if (apiData && apiData.product) {
+        const p = apiData.product;
+        const levels = apiData.price_levels || [];
+        const rrpLevel = levels.find(l => l.level === 0);
+        const bulkLevel = levels.find(l => l.level === 1);
+        const unitPrice = rrpLevel ? rrpLevel.price : 0;
+        const bulkPrice = bulkLevel ? bulkLevel.price : 0;
+        const caseQty = bulkLevel ? bulkLevel.quantity : (p.CASEQTY || 1);
+        const currentStock = p.STOCK || 0;
+        const locs = apiData.stock_locations || [];
+        const lastRecv = locs.length > 0 ? locs[0].last_received : null;
+
+        // Store for addStockItem
+        preview.dataset.apiProduct = JSON.stringify({
+          barcode: (p.PLU || '').trim(),
+          name: (p.DESC || '').trim(),
+          supplier: (p.SUPP || '').trim(),
+          rrp: unitPrice,
+          bulkPrice: bulkPrice,
+          caseQty: caseQty,
+          stock: currentStock
+        });
+
+        const lastRecvStr = lastRecv ? new Date(lastRecv).toLocaleDateString() : 'N/A';
+
+        preview.className = 'stock-preview';
+        preview.innerHTML = `
+          <div class="stock-preview-name">${(p.DESC || '').trim()}</div>
+          <div class="stock-preview-details">
+            <span>Supplier: <strong>${(p.SUPP || 'N/A').trim()}</strong></span>
+            <span>RRP: <strong>\u20AC${unitPrice.toFixed(2)}</strong></span>
+            <span>Case: <strong>${caseQty}</strong></span>
+            <span>Bulk: <strong>\u20AC${bulkPrice.toFixed(2)}</strong></span>
+          </div>
+          <div class="stock-preview-details" style="margin-top: 0.4rem;">
+            <span>📦 CES Stock: <strong style="color: ${currentStock > 0 ? 'var(--accent-green)' : '#ef4444'};">${currentStock}</strong></span>
+            <span>Last Received: <strong>${lastRecvStr}</strong></span>
+          </div>
+        `;
+        updateStatus('Live from CES Touch · Enter quantity', 'success');
+        return;
+      }
+
+      // Fallback to offline data
+      preview.dataset.apiProduct = '';
+      const { product, barcode: foundBarcode } = findProductByBarcode(barcode);
 
       if (product) {
         preview.className = 'stock-preview';
@@ -1360,8 +1516,11 @@
             <span>Case Qty: <strong>${product.caseQty}</strong></span>
             <span>Bulk: <strong>\u20AC${product.bulkPrice.toFixed(2)}</strong></span>
           </div>
+          <div class="stock-preview-details" style="margin-top: 0.4rem;">
+            <span style="color: var(--accent-orange);">⚠ Offline — no live stock data</span>
+          </div>
         `;
-        updateStatus(`Barcode scanned! Enter quantity`, 'success');
+        updateStatus('Offline data · Enter quantity', 'info');
       } else {
         preview.className = 'stock-preview not-found';
         preview.innerHTML = `
@@ -1388,30 +1547,46 @@
         return;
       }
       
-      // Clean barcode - remove any non-alphanumeric except hyphens
-      const { product, barcode: cleanBarcode } = findProductByBarcode(barcode);
-      
-      if (!product) {
-        updateStatus(`Product not found: ${cleanBarcode}`, 'error');
-        return;
+      // Check if API data is stored from preview
+      const preview = document.getElementById('stockProductPreview');
+      const apiJson = preview.dataset.apiProduct;
+      let productName, productBarcode, productSupplier, productRrp;
+
+      if (apiJson) {
+        const ap = JSON.parse(apiJson);
+        productName = ap.name;
+        productBarcode = ap.barcode;
+        productSupplier = ap.supplier || 'N/A';
+        productRrp = ap.rrp || 0;
+      } else {
+        // Fallback to offline data
+        const { product, barcode: cleanBarcode } = findProductByBarcode(barcode);
+        if (!product) {
+          updateStatus(`Product not found: ${barcode}`, 'error');
+          return;
+        }
+        productName = product.name;
+        productBarcode = cleanBarcode;
+        productSupplier = product.supplier || 'N/A';
+        productRrp = product.unitPrice || 0;
       }
       
-      // Check if already exists - ADD to existing quantity (for multiple locations)
-      const existingIndex = stockItems.findIndex(item => item.barcode === cleanBarcode);
+      // Check if already exists - ADD to existing quantity
+      const existingIndex = stockItems.findIndex(item => item.barcode === productBarcode);
       
       if (existingIndex >= 0) {
         stockItems[existingIndex].quantity += quantity;
-        updateStatus(`Updated: ${product.name} (total: ${stockItems[existingIndex].quantity})`, 'success');
+        updateStatus(`Updated: ${productName} (total: ${stockItems[existingIndex].quantity})`, 'success');
       } else {
         stockItems.push({
-          barcode: cleanBarcode,
-          name: product.name,
-          supplier: product.supplier || 'N/A',
-          rrp: product.unitPrice || 0,
-          adjustedRrp: product.unitPrice || 0,
+          barcode: productBarcode,
+          name: productName,
+          supplier: productSupplier,
+          rrp: productRrp,
+          adjustedRrp: productRrp,
           quantity: quantity
         });
-        updateStatus(`Added: ${product.name}`, 'success');
+        updateStatus(`Added: ${productName}`, 'success');
       }
       
       saveStockItems();
@@ -1420,7 +1595,8 @@
       // Clear inputs and focus back to barcode
       stockBarcodeInput.value = '';
       quantityInput.value = '';
-      document.getElementById('stockProductPreview').classList.add('hidden');
+      preview.classList.add('hidden');
+      preview.dataset.apiProduct = '';
       stockBarcodeInput.focus();
     }
 
@@ -1575,6 +1751,25 @@
       fetchDataFromUrl();
     }
 
+    async function saveApiUrl() {
+      apiUrl = apiUrlInput.value.trim().replace(/\/+$/, ''); // remove trailing slash
+      localStorage.setItem('apiUrl', apiUrl);
+      apiStatus.textContent = 'Testing connection...';
+      apiStatus.style.color = 'var(--accent-blue)';
+      const data = await apiFetch('/products/search?q=TEST');
+      if (data !== null) {
+        apiAvailable = true;
+        apiStatus.textContent = '✓ Connected — API is live';
+        apiStatus.style.color = 'var(--accent-green)';
+        updateStatus('API connected', 'success');
+      } else {
+        apiAvailable = false;
+        apiStatus.textContent = '✕ Cannot reach API — will use offline data';
+        apiStatus.style.color = '#ef4444';
+        updateStatus('API unreachable', 'error');
+      }
+    }
+
     async function fetchDataFromUrl() {
       if (!dataUrl) {
         updateStatus('No data URL configured', 'error');
@@ -1663,7 +1858,7 @@
       }
     }
 
-    function searchProduct() {
+    async function searchProduct() {
       const barcode = barcodeInput.value.trim();
       
       if (!barcode) {
@@ -1671,19 +1866,58 @@
         return;
       }
 
-      if (productsData.length === 0) {
-        showError('No product data loaded. Please configure data source in settings.');
+      const cleanBarcode = barcode.replace(/[^a-zA-Z0-9-]/g, '');
+
+      // Try API first for live pricing
+      const apiData = await apiFetch(`/products/${encodeURIComponent(cleanBarcode)}`);
+      if (apiData && apiData.product) {
+        const p = apiData.product;
+        const levels = apiData.price_levels || [];
+        const rrpLevel = levels.find(l => l.level === 0);
+        const bulkLevel = levels.find(l => l.level === 1);
+        const unitPrice = rrpLevel ? rrpLevel.price : 0;
+        const bulkPrice = bulkLevel ? bulkLevel.price : 0;
+        const caseQty = bulkLevel ? bulkLevel.quantity : (p.CASEQTY || 1);
+        const rrpCase = unitPrice * caseQty;
+        const customerSaves = rrpCase > 0 ? rrpCase - bulkPrice : 0;
+        const discountPct = rrpCase > 0 ? (customerSaves / rrpCase) * 100 : 0;
+
+        currentProduct = {
+          name: (p.DESC || '').trim(),
+          barcode: (p.PLU || '').trim(),
+          supplier: (p.SUPP || '').trim(),
+          supplierCode: (p.SUPPCODE || '').trim(),
+          caseQty: caseQty,
+          unitPrice: unitPrice,
+          bulkPrice: bulkPrice,
+          customerSaves: customerSaves,
+          discountPct: discountPct,
+          taxBulkPrice: bulkPrice,
+          taxCustomerSaves: customerSaves,
+          taxDiscountPct: discountPct,
+          cost: p.COST || 0,
+          stock: p.STOCK || 0,
+          _fromApi: true
+        };
+        taxMode = false;
+        displayProduct(currentProduct);
+        updateStatus('Live from CES Touch', 'success');
         return;
       }
 
-      // Clean barcode and find product (handles EAN-13/UPC-A differences)
-      const { product, barcode: cleanBarcode } = findProductByBarcode(barcode);
+      // Fallback to offline JSON data
+      if (productsData.length === 0) {
+        showError('No product data loaded and API unavailable. Check settings.');
+        return;
+      }
+
+      const { product, barcode: foundBarcode } = findProductByBarcode(cleanBarcode);
       
       if (product) {
         currentProduct = product;
         taxMode = false;
         displayProduct(product);
-        updateStatus('Product found', 'success');
+        updateStatus('Product found (offline data)', 'success');
       } else {
         showError(`Product not found: ${cleanBarcode}`);
       }
@@ -1768,12 +2002,7 @@
       updateStatus('Ready', 'info');
     }
 
-    // Auto-fetch on page load if URL is configured - always refresh
-    window.addEventListener('load', () => {
-      if (dataUrl) {
-        fetchDataFromUrl();
-      }
-    });
+    // init() handles everything including auto-fetch
   </script>
 </body>
 </html>
